@@ -1,0 +1,11 @@
+numpy
+pandas
+tqdm
+ipykernel
+torch
+torchvision
+transformers
+pypdf
+scikit-learn
+lightning
+torchmetrics
