@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, default_collate
 from sklearn.model_selection import train_test_split
 from pypdf import PdfReader
 
@@ -130,7 +130,7 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
                 
 class MMDataset(Dataset):
-    def __init__(self, root_dir='/mnt/disks/ext/data/gdc/tcga/brca', dataset_file='dataset.csv', split=None, rand_seed=42):
+    def __init__(self, root_dir='./', data_file='data/stils/data_stils.csv', split=None, rand_seed=42):
         """
         Args:
             root_dir (string): path to data directory
@@ -138,7 +138,7 @@ class MMDataset(Dataset):
             split (string): 'train', 'val', or 'test'.
         """
         self.root_dir = root_dir
-        df = pd.read_csv(dataset_file)
+        df = pd.read_csv(data_file)
         # Split the dataset into train+val set and test set
         train_val_df, test_df = train_test_split(df, test_size=0.1, random_state=rand_seed)
 
@@ -170,3 +170,7 @@ class MMDataset(Dataset):
         
         return wsi_feats, report_feats, sTIL_level
         # return mm_feats, sTIL_level
+        
+    def mm_collate_fn(batch):
+        wsi_feats, report_feats, labels = zip(*batch)
+        return list(wsi_feats), list(report_feats), default_collate(labels)
