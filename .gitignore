@@ -4,5 +4,6 @@ __pycache__
 .DS_Store
 data
 lightning_logs
+model_ckpts
 
 # files

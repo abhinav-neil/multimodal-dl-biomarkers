@@ -152,6 +152,7 @@ def main(
         skip_existing_outputs: bool = typer.Option(True, help="If an output already exists, skip the slide."),
         skip_slides_checks: bool = typer.Option(True, help="Do not validate the file paths before processing."),
         slides_root_dir: pathlib.Path = typer.Option(..., help="Root directory in which to find the slides."),
+        invalid_slides_path: pathlib.Path = typer.Option('data/stils/invalid_slides.txt', help="File to write invalid slides to."),
         slides_manifest_file_path: pathlib.Path = typer.Argument(
             ..., help="File from which to read the slides paths to be processed."),
         output_dir_path: pathlib.Path = typer.Argument(..., help="Output directory path in which to store the features."),
@@ -190,9 +191,9 @@ def main(
                     skip_existing=skip_existing_outputs
                 )
             except dlup.UnsupportedSlideError:
-                print(f"Unsupported file: {slide_path}")
+                print(f"invalid file: {slide_path}")
                 # write unsupported file name to file
-                with open('manifests/unsupported_slides.txt', 'a') as f:
+                with open(invalid_slides_path, 'a') as f:
                     f.write(str(slide_path) + '\n')
 
 

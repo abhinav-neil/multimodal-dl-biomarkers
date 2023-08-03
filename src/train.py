@@ -1,6 +1,9 @@
+import os
 from tqdm import tqdm
 import torch
 import torch.nn as nn
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 def train_mm(model, train_loader, val_loader, epochs, device, patience=5):
     """
@@ -101,3 +104,47 @@ def evaluate(model, test_loader, device):
     print(f'test Loss: {test_loss:.3f}, test Acc: {test_acc:.3f}')
 
     return test_loss, test_acc
+
+
+def train_mm_stil_classifier(model, train_loader, val_loader, args):
+    """
+    Trains the given multimodal STIL classifier model with the provided arguments.
+
+    Args:
+        model (pl.LightningModule): The PyTorch Lightning model to be trained.
+        train_loader (torch.utils.data.DataLoader): The DataLoader for the training data.
+        val_loader (torch.utils.data.DataLoader): The DataLoader for the validation data.
+        args (dict): A dictionary containing the following keys:
+            - num_epochs (int, optional): The number of epochs for training. Defaults to 10.
+            - patience (int, optional): The number of epochs with no improvement after which training will be stopped. Defaults to 5.
+            - ckpt_dir (str, optional): The directory where the model checkpoints will be saved. Defaults to 'model_ckpts/'.
+    """
+
+    # Define early stopping callback
+    early_stop_callback = EarlyStopping(
+        monitor='val_loss',
+        patience=args.get('patience', 5),
+        verbose=True,
+        mode='min'
+    )
+
+    # Define model checkpoint callback
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_loss',
+        dirpath= os.path.join(args.get('ckpt_dir', 'model_ckpts'), model.__class__.__name__),
+        filename='ckpt_best',
+        save_top_k=1,
+        mode='min'
+    )
+
+    # Initialize the trainer
+    trainer = pl.Trainer(
+        max_epochs=args.get('num_epochs', 10),
+        callbacks=[early_stop_callback, checkpoint_callback],
+        log_every_n_steps=5
+    )
+
+    # Train the model
+    trainer.fit(model, train_loader, val_loader)
+    print(f'training on device: {model.device}')
+    return model, trainer

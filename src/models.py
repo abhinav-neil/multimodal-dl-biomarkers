@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from typing import Any, Callable, List, Optional, Type, Union
 import torch
 import torch.nn as nn
@@ -266,11 +267,26 @@ def retccl_resnet50(*, weights: Optional[HistoRetCCLResnet50_Weights] = None,
         model.load_state_dict(weights.get_state_dict(progress=progress))
     return model
 
-class MLPClassifier(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super(MLPClassifier, self).__init__()
-        self.model = nn.Sequential(OrderedDict([
-            ('fc1', nn.Linear(input_dim, hidden_dim)),
+class MLPSTILClassifier(pl.LightningModule):
+    def __init__(
+            self,
+            img_channels_in: int,
+            text_channels_in: int,
+            hidden_dim: int,
+            num_classes: int,
+            learning_rate: float = 5e-4,
+            weight_decay: float = 5e-4,
+            **kwargs,
+    ):
+        super().__init__()
+        """Initialize the classification model."""
+        super().__init__()
+        self.save_hyperparameters()
+        self.loss = torch.nn.CrossEntropyLoss()
+        self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=self.hparams.num_classes) # Initialize the Accuracy object
+
+        self.classifier = nn.Sequential(OrderedDict([
+            ('fc1', nn.Linear(img_channels_in + text_channels_in, hidden_dim)),
             ('bn1', nn.BatchNorm1d(hidden_dim)),
             ('relu1', nn.ReLU()),
             ('dropout1', nn.Dropout(0.5)),
@@ -278,11 +294,87 @@ class MLPClassifier(nn.Module):
             ('bn2', nn.BatchNorm1d(hidden_dim)),
             ('relu2', nn.ReLU()),
             ('dropout2', nn.Dropout(0.5)),
-            ('output', nn.Linear(hidden_dim, output_dim))
+            ('output', nn.Linear(hidden_dim, num_classes)),
+            ('softmax', nn.Softmax(dim=1))
         ]))
+        
+    def add_model_specific_args(parser):
+        parser.add_argument("--img-channels-in", type=int)
+        parser.add_argument("--text-channels-in", type=int)
+        parser.add_argument("--num-classes", type=int)
+        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--weight_decay", type=float, default=5e-4)
+        return parser
 
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, img_feats, text_feats):
+        """Model forward.
+
+        We expect a list of tensors for both image and text features. 
+        Each list item tensor contains the features of a single slide.
+        """
+        out = []
+        for img_sub_x, text_sub_x in zip(img_feats, text_feats):
+            # Weighted sum of all the image feature vectors.
+            img_sub_x = img_sub_x.to(self.device)
+            # avg wsi feats along spatial dims
+            img_sub_x = img_sub_x.mean(dim=(1,2))
+            # Concatenate the global image embedding with the text embedding.
+            text_sub_x = text_sub_x.to(self.device).squeeze()
+            mm_feats = torch.cat((img_sub_x, text_sub_x))
+            out.append(mm_feats)
+
+        out = torch.stack(out)  # Stack all tensors in the list into a single tensor
+        out = self.classifier(out)  # Pass the tensor through the classifier
+        # out = F.softmax(out, dim=1)  # Apply softmax along dimension 1
+        return out
+
+    def step(self, batch, batch_idx):
+        img_feats, text_feats, _, stil_levels = batch
+        stil_levels = stil_levels.to(self.device)
+        y_hat = self.forward(img_feats, text_feats)
+        # print(f"y_hat shape: {y_hat.shape}, labels shape: {labels.shape}")  # Add this line
+        loss = self.loss(y_hat, stil_levels)
+        return loss, y_hat, stil_levels
+
+
+    def training_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        acc = self.accuracy(y_hat.softmax(dim=-1), y)  # Compute accuracy
+        self.log("train_loss", loss, batch_size=len(y))
+        self.log("train_acc", acc, batch_size=len(y))  # Log accuracy
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        acc = self.accuracy(y_hat.softmax(dim=-1), y)  # Compute accuracy
+        self.log("val_loss", loss, batch_size=len(y))
+        self.log("val_acc", acc, batch_size=len(y))  # Log accuracy
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        acc = self.accuracy(y_hat.softmax(dim=-1), y)  # Compute accuracy
+        self.log("test_loss", loss, batch_size=len(y))
+        self.log("test_acc", acc, batch_size=len(y))  # Log accuracy
+        return loss
+    
+    def on_train_epoch_end(self): 
+        # log epoch metric
+        self.log('train_acc_epoch', self.accuracy.compute())
+
+    def on_validation_epoch_end(self):
+        self.log('val_acc_epoch', self.accuracy.compute())
+
+    def on_test_epoch_end(self):
+        self.log('test_acc_epoch', self.accuracy.compute())
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay
+        )
+        return optimizer
     
 class Attention1DSTILClassifier(pl.LightningModule):
     def __init__(
@@ -304,7 +396,7 @@ class Attention1DSTILClassifier(pl.LightningModule):
         )
         self.classifier = torch.nn.Sequential(
             torch.nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, self.hparams.num_classes),
-            torch.nn.softmax(dim=1)
+            torch.nn.Softmax(dim=1)
         )
         self.loss = torch.nn.CrossEntropyLoss()
         self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=self.hparams.num_classes) # Initialize the Accuracy object
@@ -346,12 +438,12 @@ class Attention1DSTILClassifier(pl.LightningModule):
         return out
 
     def step(self, batch, batch_idx):
-        img_feats, text_feats, labels = batch
-        labels = labels.to(self.device)
+        img_feats, text_feats, _, stil_levels = batch
+        stil_levels = stil_levels.to(self.device)
         y_hat = self.forward(img_feats, text_feats)
         # print(f"y_hat shape: {y_hat.shape}, labels shape: {labels.shape}")  # Add this line
-        loss = self.loss(y_hat, labels)
-        return loss, y_hat, labels
+        loss = self.loss(y_hat, stil_levels)
+        return loss, y_hat, stil_levels
 
 
     def training_step(self, batch, batch_idx):
@@ -524,12 +616,12 @@ class Attention2DSTILClassifier(pl.LightningModule):
         return out
 
     def step(self, batch, batch_idx):
-        img_feats, text_feats, labels = batch
-        labels = labels.to(self.device)
+        img_feats, text_feats, _, stil_levels = batch
+        stil_levels = stil_levels.to(self.device)
         y_hat = self.forward(img_feats, text_feats)
         # print(f"y_hat shape: {y_hat.shape}, labels shape: {labels.shape}")  # Add this line
-        loss = self.loss(y_hat, labels)
-        return loss, y_hat, labels
+        loss = self.loss(y_hat, stil_levels)
+        return loss, y_hat, stil_levels
 
 
     def training_step(self, batch, batch_idx):

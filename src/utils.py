@@ -166,11 +166,11 @@ class MMDataset(Dataset):
         report_feats = torch.load(report_feats_path)
         # concat wsi and report feats
         # mm_feats = torch.cat((wsi_feats, report_feats.squeeze()))
-        sTIL_level = self.df.iloc[idx]['sTIL_level']
+        stil_score = self.df.iloc[idx]['stil_score']
+        stil_level = self.df.iloc[idx]['stil_lvl']
         
-        return wsi_feats, report_feats, sTIL_level
-        # return mm_feats, sTIL_level
+        return wsi_feats, report_feats, stil_score, stil_level
         
     def mm_collate_fn(batch):
-        wsi_feats, report_feats, labels = zip(*batch)
-        return list(wsi_feats), list(report_feats), default_collate(labels)
+        wsi_feats, report_feats, stil_scores, stil_levels = zip(*batch)
+        return list(wsi_feats), list(report_feats), default_collate(stil_scores), default_collate(stil_levels)
