@@ -9,3 +9,4 @@ pypdf
 scikit-learn
 lightning
 torchmetrics
+tensorboard 

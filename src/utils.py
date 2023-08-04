@@ -173,4 +173,4 @@ class MMDataset(Dataset):
         
     def mm_collate_fn(batch):
         wsi_feats, report_feats, stil_scores, stil_levels = zip(*batch)
-        return list(wsi_feats), list(report_feats), default_collate(stil_scores), default_collate(stil_levels)
+        return list(wsi_feats), list(report_feats), default_collate(stil_scores).float(), default_collate(stil_levels)

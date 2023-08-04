@@ -287,13 +287,13 @@ class MLPSTILClassifier(pl.LightningModule):
 
         self.classifier = nn.Sequential(OrderedDict([
             ('fc1', nn.Linear(img_channels_in + text_channels_in, hidden_dim)),
-            ('bn1', nn.BatchNorm1d(hidden_dim)),
+            # ('bn1', nn.BatchNorm1d(hidden_dim)),
             ('relu1', nn.ReLU()),
-            ('dropout1', nn.Dropout(0.5)),
+            # ('dropout1', nn.Dropout(0.5)),
             ('fc2', nn.Linear(hidden_dim, hidden_dim)),
-            ('bn2', nn.BatchNorm1d(hidden_dim)),
+            # ('bn2', nn.BatchNorm1d(hidden_dim)),
             ('relu2', nn.ReLU()),
-            ('dropout2', nn.Dropout(0.5)),
+            # ('dropout2', nn.Dropout(0.5)),
             ('output', nn.Linear(hidden_dim, num_classes)),
             ('softmax', nn.Softmax(dim=1))
         ]))
@@ -367,6 +367,134 @@ class MLPSTILClassifier(pl.LightningModule):
 
     def on_test_epoch_end(self):
         self.log('test_acc_epoch', self.accuracy.compute())
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay
+        )
+        return optimizer
+    
+class MLPSTILRegressor(pl.LightningModule):
+    def __init__(
+            self,
+            img_channels_in: int,
+            text_channels_in: int,
+            hidden_dim: int,
+            learning_rate: float = 5e-4,
+            weight_decay: float = 5e-4,
+            **kwargs,
+    ):
+        super().__init__()
+        """Initialize the classification model."""
+        super().__init__()
+        self.save_hyperparameters()
+        self.loss = nn.MSELoss()    # MSE loss fn
+        # metrics
+        self.train_corr = torchmetrics.PearsonCorrCoef()
+        self.train_r2 = torchmetrics.R2Score()
+        self.val_corr = torchmetrics.PearsonCorrCoef()
+        self.val_r2 = torchmetrics.R2Score()
+        self.test_corr = torchmetrics.PearsonCorrCoef()
+        self.test_r2 = torchmetrics.R2Score()
+        # regressor
+        self.regressor = nn.Sequential(OrderedDict([
+            ('fc1', nn.Linear(img_channels_in + text_channels_in, hidden_dim)),
+            # ('bn1', nn.BatchNorm1d(hidden_dim)),
+            ('relu1', nn.ReLU()),
+            # ('dropout1', nn.Dropout(0.5)),
+            ('fc2', nn.Linear(hidden_dim, hidden_dim)),
+            # ('bn2', nn.BatchNorm1d(hidden_dim)),
+            ('relu2', nn.ReLU()),
+            # ('dropout2', nn.Dropout(0.5)),
+            ('output', nn.Linear(hidden_dim, 1)),
+            ('sigmoid', nn.Sigmoid())
+        ]))
+        
+    def add_model_specific_args(parser):
+        parser.add_argument("--img-channels-in", type=int)
+        parser.add_argument("--text-channels-in", type=int)
+        parser.add_argument("--num-classes", type=int)
+        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--weight_decay", type=float, default=5e-4)
+        return parser
+
+    def forward(self, img_feats, text_feats):
+        """Model forward.
+
+        We expect a list of tensors for both image and text features. 
+        Each list item tensor contains the features of a single slide.
+        """
+        out = []
+        for img_sub_x, text_sub_x in zip(img_feats, text_feats):
+            # Weighted sum of all the image feature vectors.
+            img_sub_x = img_sub_x.to(self.device)
+            # avg wsi feats along spatial dims
+            img_sub_x = img_sub_x.mean(dim=(1,2))
+            # Concatenate the global image embedding with the text embedding.
+            text_sub_x = text_sub_x.to(self.device).squeeze()
+            mm_feats = torch.cat((img_sub_x, text_sub_x))
+            out.append(mm_feats)
+
+        out = torch.stack(out)  # Stack all tensors in the list into a single tensor
+        out = self.regressor(out)  # Pass the tensor through the regressor
+        return out.squeeze()
+
+    def step(self, batch, batch_idx):
+        img_feats, text_feats, stil_scores, _ = batch
+        stil_scores = stil_scores.to(self.device)
+        y_hat = self.forward(img_feats, text_feats)
+        loss = self.loss(y_hat, stil_scores)
+        return loss, y_hat, stil_scores
+
+    def training_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("train_loss", loss, batch_size=len(y))
+        self.train_corr(y_hat, y)
+        self.log("train_corr", self.train_corr)
+        self.train_r2(y_hat, y)
+        self.log("train_r2", self.train_r2)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("val_loss", loss, batch_size=len(y))
+        self.val_corr(y_hat, y)
+        self.log("val_corr", self.val_corr)
+        self.val_r2(y_hat, y)
+        self.log("val_r2", self.val_r2)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("test_loss", loss, batch_size=len(y))
+        self.test_corr(y_hat, y)
+        self.log("test_corr", self.test_corr)
+        self.test_r2(y_hat, y)
+        self.log("test_r2", self.test_r2)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay
+        )
+        return optimizer
+    
+    def on_train_epoch_end(self): 
+        # log epoch metric
+        self.log('train_r2_epoch', self.train_r2.compute())
+        self.log('train_corr_epoch', self.train_corr.compute())
+
+    def on_validation_epoch_end(self):
+        self.log('val_r2_epoch', self.val_r2.compute())
+        self.log('val_corr_epoch', self.val_corr.compute())
+
+    def on_test_epoch_end(self):
+        self.log('test_r2_epoch', self.test_r2.compute())
+        self.log('test_corr_epoch', self.test_corr.compute())
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -485,6 +613,138 @@ class Attention1DSTILClassifier(pl.LightningModule):
         )
         return optimizer
 
+class Attention1DSTILRegressor(pl.LightningModule):
+    def __init__(
+            self,
+            img_channels_in: int,
+            text_channels_in: int,
+            learning_rate: float = 5e-4,
+            weight_decay: float = 5e-4,
+            **kwargs,
+    ):
+        """Initialize the classification model."""
+        super().__init__()
+        self.save_hyperparameters()
+        self.attention = torch.nn.Sequential(
+            torch.nn.Linear(self.hparams.img_channels_in, 128),
+            torch.nn.Tanh(),
+            torch.nn.Linear(128, 1),
+        )
+        
+        # regressor
+        self.regressor = torch.nn.Sequential(
+            torch.nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, 1),
+            nn.Sigmoid()
+        )
+        
+        self.loss = nn.MSELoss()    # MSE loss fn
+        
+        # metrics
+        self.train_corr = torchmetrics.PearsonCorrCoef()
+        self.train_r2 = torchmetrics.R2Score()
+        self.val_corr = torchmetrics.PearsonCorrCoef()
+        self.val_r2 = torchmetrics.R2Score()
+        self.test_corr = torchmetrics.PearsonCorrCoef()
+        self.test_r2 = torchmetrics.R2Score()
+        
+    def add_model_specific_args(parser):
+        parser.add_argument("--img-channels-in", type=int)
+        parser.add_argument("--text-channels-in", type=int)
+        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--weight_decay", type=float, default=5e-4)
+        return parser
+
+    def forward(self, img_feats, text_feats):
+        """Model forward.
+
+        We expect a list of tensors for both image and text features. 
+        Each list item tensor contains the features of a single slide.
+        """
+        out = []
+        for img_sub_x, text_sub_x in zip(img_feats, text_feats):
+            # Weighted sum of all the image feature vectors.
+            img_sub_x = img_sub_x.to(self.device)
+            img_sub_x = img_sub_x.reshape(self.hparams.img_channels_in, -1).T
+            attention_w = self.attention(img_sub_x)
+            attention_w = torch.transpose(attention_w, 1, 0)
+            attention_w = torch.nn.functional.softmax(attention_w, dim=1)
+            img_sub_x = torch.mm(attention_w, img_sub_x).squeeze()
+
+            # Concatenate the global image embedding with the text embedding.
+            text_sub_x = text_sub_x.to(self.device).squeeze()
+            mm_feats = torch.cat((img_sub_x, text_sub_x))
+
+            out.append(mm_feats)
+
+        out = torch.stack(out)  # Stack all tensors in the list into a single tensor
+        out = self.regressor(out)  # Pass the tensor through the classifier
+        # out = F.softmax(out, dim=1)  # Apply softmax along dimension 1
+
+        return out.squeeze()
+
+    def step(self, batch, batch_idx):
+        img_feats, text_feats, stil_scores, _ = batch
+        stil_scores = stil_scores.to(self.device)
+        y_hat = self.forward(img_feats, text_feats)
+        loss = self.loss(y_hat, stil_scores)
+        return loss, y_hat, stil_scores
+
+    def training_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("train_loss", loss, batch_size=len(y))
+        self.train_corr(y_hat, y)
+        self.log("train_corr", self.train_corr)
+        self.train_r2(y_hat, y)
+        self.log("train_r2", self.train_r2)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("val_loss", loss, batch_size=len(y))
+        self.val_corr(y_hat, y)
+        self.log("val_corr", self.val_corr)
+        self.val_r2(y_hat, y)
+        self.log("val_r2", self.val_r2)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("test_loss", loss, batch_size=len(y))
+        self.test_corr(y_hat, y)
+        self.log("test_corr", self.test_corr)
+        self.test_r2(y_hat, y)
+        self.log("test_r2", self.test_r2)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay
+        )
+        return optimizer
+    
+    def on_train_epoch_end(self): 
+        # log epoch metric
+        self.log('train_r2_epoch', self.train_r2.compute())
+        self.log('train_corr_epoch', self.train_corr.compute())
+
+    def on_validation_epoch_end(self):
+        self.log('val_r2_epoch', self.val_r2.compute())
+        self.log('val_corr_epoch', self.val_corr.compute())
+
+    def on_test_epoch_end(self):
+        self.log('test_r2_epoch', self.test_r2.compute())
+        self.log('test_corr_epoch', self.test_corr.compute())
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay
+        )
+        return optimizer
+ 
 def pad_feature(input_tensor, dst_shape):
     width = dst_shape[-1]
     height = dst_shape[-2]
@@ -654,6 +914,143 @@ class Attention2DSTILClassifier(pl.LightningModule):
 
     def on_test_epoch_end(self):
         self.log('test_acc_epoch', self.accuracy.compute())
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay
+        )
+        return optimizer
+
+class Attention2DSTILRegressor(pl.LightningModule):
+    def __init__(
+            self,
+            img_channels_in: int,
+            text_channels_in: int,
+            learning_rate: float = 5e-4,
+            weight_decay: float = 5e-4,
+            **kwargs,
+    ):
+        """Initialize the classification model."""
+        super().__init__()
+        self.save_hyperparameters()
+
+        # attention
+        self.attention = EncoderDecoderAttention(img_channels_in)
+
+        # After using attention, let's map the channels to two channels only.
+        self.maps = torch.nn.Sequential(
+            torch.nn.Conv2d(self.hparams.img_channels_in, 1, kernel_size=3, padding=1),
+            #torch.nn.BatchNorm2d(1),
+            torch.nn.ReLU(),
+            #torch.nn.Conv2d(channels_in, 64, kernel_size=3, padding=1),
+            #torch.nn.BatchNorm2d(64),
+        )
+
+        # regressor
+        self.regressor = torch.nn.Sequential(
+            torch.nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, 1),
+            nn.Sigmoid()
+        )
+        
+        self.loss = nn.MSELoss()    # MSE loss fn
+        
+        # metrics
+        self.train_corr = torchmetrics.PearsonCorrCoef()
+        self.train_r2 = torchmetrics.R2Score()
+        self.val_corr = torchmetrics.PearsonCorrCoef()
+        self.val_r2 = torchmetrics.R2Score()
+        self.test_corr = torchmetrics.PearsonCorrCoef()
+        self.test_r2 = torchmetrics.R2Score()
+
+    def add_model_specific_args(parser):
+        parser.add_argument("--img-channels-in", type=int)
+        parser.add_argument("--text-channels-in", type=int)
+        parser.add_argument("--num-classes", type=int)
+        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--weight_decay", type=float, default=5e-4)
+        return parser
+
+    def forward(self, img_feats, text_feats):
+        """Model forward.
+
+        We expect a list of tensors for both image and text features. 
+        Each list item tensor contains the features of a single slide.
+        """
+        out = []
+        for img_sub_x, text_sub_x in zip(img_feats, text_feats):
+            # Weighted sum of all the image feature vectors.
+            img_sub_x = img_sub_x.to(self.device)   # emb_dim x h x w
+            attention_w = self.attention(img_sub_x.unsqueeze(0)).squeeze(0) # 1 x h x w
+            # img_sub_x = self.maps(img_sub_x)  # 1 x h x w
+            # take dot product of attention weights (1 x h x w) and image embeddings (emb_dim x h x w) -> emb_dim 
+            img_sub_x = torch.einsum('chw,ehw->e', attention_w, img_sub_x)  # emb_dim
+    
+            # Concatenate the global image embedding with the text embedding.
+            text_sub_x = text_sub_x.to(self.device).squeeze()
+            mm_feats = torch.cat((img_sub_x, text_sub_x))
+            out.append(mm_feats)
+
+        out = torch.stack(out)  # Stack all tensors in the list into a single tensor
+        out = self.regressor(out)  # Pass the tensor through the classifier
+        
+        return out.squeeze()
+
+    def step(self, batch, batch_idx):
+        img_feats, text_feats, stil_scores, _ = batch
+        stil_scores = stil_scores.to(self.device)
+        y_hat = self.forward(img_feats, text_feats)
+        loss = self.loss(y_hat, stil_scores)
+        return loss, y_hat, stil_scores
+
+    def training_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("train_loss", loss, batch_size=len(y))
+        self.train_corr(y_hat, y)
+        self.log("train_corr", self.train_corr)
+        self.train_r2(y_hat, y)
+        self.log("train_r2", self.train_r2)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("val_loss", loss, batch_size=len(y))
+        self.val_corr(y_hat, y)
+        self.log("val_corr", self.val_corr)
+        self.val_r2(y_hat, y)
+        self.log("val_r2", self.val_r2)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        loss, y_hat, y = self.step(batch, batch_idx)
+        self.log("test_loss", loss, batch_size=len(y))
+        self.test_corr(y_hat, y)
+        self.log("test_corr", self.test_corr)
+        self.test_r2(y_hat, y)
+        self.log("test_r2", self.test_r2)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay
+        )
+        return optimizer
+    
+    def on_train_epoch_end(self): 
+        # log epoch metric
+        self.log('train_r2_epoch', self.train_r2.compute())
+        self.log('train_corr_epoch', self.train_corr.compute())
+
+    def on_validation_epoch_end(self):
+        self.log('val_r2_epoch', self.val_r2.compute())
+        self.log('val_corr_epoch', self.val_corr.compute())
+
+    def on_test_epoch_end(self):
+        self.log('test_r2_epoch', self.test_r2.compute())
+        self.log('test_corr_epoch', self.test_corr.compute())
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
