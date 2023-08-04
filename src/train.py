@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 
 def train_mm(model, train_loader, val_loader, epochs, device, patience=5):
     """
@@ -105,8 +106,7 @@ def evaluate(model, test_loader, device):
 
     return test_loss, test_acc
 
-
-def train_mm_stil_classifier(model, train_loader, val_loader, args):
+def train_mm_stil(model, train_loader, val_loader, args):
     """
     Trains the given multimodal STIL classifier model with the provided arguments.
 
@@ -118,6 +118,7 @@ def train_mm_stil_classifier(model, train_loader, val_loader, args):
             - num_epochs (int, optional): The number of epochs for training. Defaults to 10.
             - patience (int, optional): The number of epochs with no improvement after which training will be stopped. Defaults to 5.
             - ckpt_dir (str, optional): The directory where the model checkpoints will be saved. Defaults to 'model_ckpts/'.
+            - resume_ckpt (str, optional): The path to a checkpoint from which training will resume. Defaults to None.
     """
 
     # Define early stopping callback
@@ -136,15 +137,21 @@ def train_mm_stil_classifier(model, train_loader, val_loader, args):
         save_top_k=1,
         mode='min'
     )
+    
+    # Define logger
+    # Define logger
+    logger = TensorBoardLogger("lightning_logs", name=model.__class__.__name__)
+
 
     # Initialize the trainer
     trainer = pl.Trainer(
         max_epochs=args.get('num_epochs', 10),
         callbacks=[early_stop_callback, checkpoint_callback],
-        log_every_n_steps=5
+        log_every_n_steps=5,
+        logger=logger,
     )
 
     # Train the model
-    trainer.fit(model, train_loader, val_loader)
+    trainer.fit(model, train_loader, val_loader, ckpt_path=args.get('resume_ckpt', None))
     print(f'training on device: {model.device}')
     return model, trainer
