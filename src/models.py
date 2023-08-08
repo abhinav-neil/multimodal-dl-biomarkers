@@ -270,11 +270,11 @@ def retccl_resnet50(*, weights: Optional[HistoRetCCLResnet50_Weights] = None,
 class MLPSTILClassifier(pl.LightningModule):
     def __init__(
             self,
-            img_channels_in: int,
-            text_channels_in: int,
-            hidden_dim: int,
-            num_classes: int,
-            learning_rate: float = 5e-4,
+            img_channels_in: int=2048,
+            text_channels_in: int=1024,
+            hidden_dim: int=32,
+            num_classes: int=10,
+            lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
     ):
@@ -282,7 +282,7 @@ class MLPSTILClassifier(pl.LightningModule):
         """Initialize the classification model."""
         super().__init__()
         self.save_hyperparameters()
-        self.loss = torch.nn.CrossEntropyLoss()
+        self.loss = nn.CrossEntropyLoss()
         self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=self.hparams.num_classes) # Initialize the Accuracy object
 
         self.classifier = nn.Sequential(OrderedDict([
@@ -302,7 +302,7 @@ class MLPSTILClassifier(pl.LightningModule):
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
         parser.add_argument("--num-classes", type=int)
-        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--weight_decay", type=float, default=5e-4)
         return parser
 
@@ -371,7 +371,7 @@ class MLPSTILClassifier(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -379,10 +379,10 @@ class MLPSTILClassifier(pl.LightningModule):
 class MLPSTILRegressor(pl.LightningModule):
     def __init__(
             self,
-            img_channels_in: int,
-            text_channels_in: int,
-            hidden_dim: int,
-            learning_rate: float = 5e-4,
+            img_channels_in: int=2048,
+            text_channels_in: int=1024,
+            hidden_dim: int=32,
+            lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
     ):
@@ -416,7 +416,7 @@ class MLPSTILRegressor(pl.LightningModule):
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
         parser.add_argument("--num-classes", type=int)
-        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--weight_decay", type=float, default=5e-4)
         return parser
 
@@ -478,7 +478,7 @@ class MLPSTILRegressor(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -499,7 +499,7 @@ class MLPSTILRegressor(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -507,33 +507,33 @@ class MLPSTILRegressor(pl.LightningModule):
 class Attention1DSTILClassifier(pl.LightningModule):
     def __init__(
             self,
-            img_channels_in: int,
-            text_channels_in: int,
-            num_classes: int,
-            learning_rate: float = 5e-4,
+            img_channels_in: int=2048,
+            text_channels_in: int=1024,
+            num_classes: int=10,
+            lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
     ):
         """Initialize the classification model."""
         super().__init__()
         self.save_hyperparameters()
-        self.attention = torch.nn.Sequential(
-            torch.nn.Linear(self.hparams.img_channels_in, 128),
-            torch.nn.Tanh(),
-            torch.nn.Linear(128, 1),
+        self.attention = nn.Sequential(
+            nn.Linear(self.hparams.img_channels_in, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
         )
-        self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, self.hparams.num_classes),
-            torch.nn.Softmax(dim=1)
+        self.classifier = nn.Sequential(
+            nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, self.hparams.num_classes),
+            nn.Softmax(dim=1)
         )
-        self.loss = torch.nn.CrossEntropyLoss()
+        self.loss = nn.CrossEntropyLoss()
         self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=self.hparams.num_classes) # Initialize the Accuracy object
 
     def add_model_specific_args(parser):
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
         parser.add_argument("--num-classes", type=int)
-        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--weight_decay", type=float, default=5e-4)
         return parser
 
@@ -550,7 +550,7 @@ class Attention1DSTILClassifier(pl.LightningModule):
             img_sub_x = img_sub_x.reshape(self.hparams.img_channels_in, -1).T
             attention_w = self.attention(img_sub_x)
             attention_w = torch.transpose(attention_w, 1, 0)
-            attention_w = torch.nn.functional.softmax(attention_w, dim=1)
+            attention_w = nn.functional.softmax(attention_w, dim=1)
             img_sub_x = torch.mm(attention_w, img_sub_x).squeeze()
 
             # Concatenate the global image embedding with the text embedding.
@@ -608,7 +608,7 @@ class Attention1DSTILClassifier(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -616,24 +616,24 @@ class Attention1DSTILClassifier(pl.LightningModule):
 class Attention1DSTILRegressor(pl.LightningModule):
     def __init__(
             self,
-            img_channels_in: int,
-            text_channels_in: int,
-            learning_rate: float = 5e-4,
+            img_channels_in: int=2048,
+            text_channels_in: int=1024,
+            lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
     ):
         """Initialize the classification model."""
         super().__init__()
         self.save_hyperparameters()
-        self.attention = torch.nn.Sequential(
-            torch.nn.Linear(self.hparams.img_channels_in, 128),
-            torch.nn.Tanh(),
-            torch.nn.Linear(128, 1),
+        self.attention = nn.Sequential(
+            nn.Linear(self.hparams.img_channels_in, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
         )
         
         # regressor
-        self.regressor = torch.nn.Sequential(
-            torch.nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, 1),
+        self.regressor = nn.Sequential(
+            nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, 1),
             nn.Sigmoid()
         )
         
@@ -650,7 +650,7 @@ class Attention1DSTILRegressor(pl.LightningModule):
     def add_model_specific_args(parser):
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
-        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--weight_decay", type=float, default=5e-4)
         return parser
 
@@ -667,7 +667,7 @@ class Attention1DSTILRegressor(pl.LightningModule):
             img_sub_x = img_sub_x.reshape(self.hparams.img_channels_in, -1).T
             attention_w = self.attention(img_sub_x)
             attention_w = torch.transpose(attention_w, 1, 0)
-            attention_w = torch.nn.functional.softmax(attention_w, dim=1)
+            attention_w = nn.functional.softmax(attention_w, dim=1)
             img_sub_x = torch.mm(attention_w, img_sub_x).squeeze()
 
             # Concatenate the global image embedding with the text embedding.
@@ -719,7 +719,7 @@ class Attention1DSTILRegressor(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -740,7 +740,7 @@ class Attention1DSTILRegressor(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -751,44 +751,44 @@ def pad_feature(input_tensor, dst_shape):
     pad_width = width - input_tensor.shape[-1]
     pad_height = height - input_tensor.shape[-2]
     padding = (0, pad_width, 0, pad_height)
-    return torch.nn.functional.pad(input_tensor, padding)
+    return nn.functional.pad(input_tensor, padding)
     
-class EncoderDecoderAttention(torch.nn.Module):
+class EncoderDecoderAttention(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         num_channels = 64
 
         # Downchanneling conv.
-        self.down_channeling_conv = torch.nn.Sequential(
-            torch.nn.Conv2d(in_channels, num_channels, kernel_size=3, padding=1),
-            torch.nn.BatchNorm2d(num_channels),
-            torch.nn.ReLU()
+        self.down_channeling_conv = nn.Sequential(
+            nn.Conv2d(in_channels, num_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(num_channels),
+            nn.ReLU()
         )
 
         # Downsampling convs.
-        self.dconv1 = torch.nn.Sequential(
-            torch.nn.Conv2d(num_channels, 32, kernel_size=3, stride=2, padding=1),
-            torch.nn.BatchNorm2d(32),
-            torch.nn.ReLU()
+        self.dconv1 = nn.Sequential(
+            nn.Conv2d(num_channels, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU()
         )
-        self.dconv2 = torch.nn.Sequential(
-            torch.nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            torch.nn.BatchNorm2d(64),
-            torch.nn.ReLU()
+        self.dconv2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU()
         )
-        self.uconv1 = torch.nn.Sequential(
-            torch.nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
-            torch.nn.BatchNorm2d(32),
-            torch.nn.ReLU()
+        self.uconv1 = nn.Sequential(
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU()
         )
-        self.uconv2 = torch.nn.Sequential(
-            torch.nn.ConvTranspose2d(64, num_channels, kernel_size=3, stride=2, padding=1, output_padding=1),
-            torch.nn.BatchNorm2d(num_channels),
-            torch.nn.ReLU()
+        self.uconv2 = nn.Sequential(
+            nn.ConvTranspose2d(64, num_channels, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(num_channels),
+            nn.ReLU()
         )
-        self.merge = torch.nn.Sequential(
-            torch.nn.Conv2d(num_channels * 2, 1, kernel_size=1, stride=1, padding=1),
-            torch.nn.Sigmoid()
+        self.merge = nn.Sequential(
+            nn.Conv2d(num_channels * 2, 1, kernel_size=1, stride=1, padding=1),
+            nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -813,10 +813,10 @@ class EncoderDecoderAttention(torch.nn.Module):
 class Attention2DSTILClassifier(pl.LightningModule):
     def __init__(
             self,
-            img_channels_in: int,
-            text_channels_in: int,
-            num_classes: int,
-            learning_rate: float = 5e-4,
+            img_channels_in: int=2048,
+            text_channels_in: int=1024,
+            num_classes: int=10,
+            lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
     ):
@@ -826,27 +826,27 @@ class Attention2DSTILClassifier(pl.LightningModule):
         self.attention = EncoderDecoderAttention(img_channels_in)
 
         # After using attention, let's map the channels to two channels only.
-        self.maps = torch.nn.Sequential(
-            torch.nn.Conv2d(self.hparams.img_channels_in, 1, kernel_size=3, padding=1),
-            #torch.nn.BatchNorm2d(1),
-            torch.nn.ReLU(),
-            #torch.nn.Conv2d(channels_in, 64, kernel_size=3, padding=1),
-            #torch.nn.BatchNorm2d(64),
+        self.maps = nn.Sequential(
+            nn.Conv2d(self.hparams.img_channels_in, 1, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(1),
+            nn.ReLU(),
+            #nn.Conv2d(channels_in, 64, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(64),
         )
         
-        self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, self.hparams.num_classes),
-            torch.nn.Softmax(dim=1)
+        self.classifier = nn.Sequential(
+            nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, self.hparams.num_classes),
+            nn.Softmax(dim=1)
         )  
         
-        self.loss = torch.nn.CrossEntropyLoss()
+        self.loss = nn.CrossEntropyLoss()
         self.accuracy = torchmetrics.Accuracy(task='multiclass', num_classes=self.hparams.num_classes) # Initialize the Accuracy object
 
     def add_model_specific_args(parser):
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
         parser.add_argument("--num-classes", type=int)
-        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--weight_decay", type=float, default=5e-4)
         return parser
 
@@ -918,7 +918,7 @@ class Attention2DSTILClassifier(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -926,9 +926,9 @@ class Attention2DSTILClassifier(pl.LightningModule):
 class Attention2DSTILRegressor(pl.LightningModule):
     def __init__(
             self,
-            img_channels_in: int,
-            text_channels_in: int,
-            learning_rate: float = 5e-4,
+            img_channels_in: int=2048,
+            text_channels_in: int=1024,
+            lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
     ):
@@ -940,17 +940,17 @@ class Attention2DSTILRegressor(pl.LightningModule):
         self.attention = EncoderDecoderAttention(img_channels_in)
 
         # After using attention, let's map the channels to two channels only.
-        self.maps = torch.nn.Sequential(
-            torch.nn.Conv2d(self.hparams.img_channels_in, 1, kernel_size=3, padding=1),
-            #torch.nn.BatchNorm2d(1),
-            torch.nn.ReLU(),
-            #torch.nn.Conv2d(channels_in, 64, kernel_size=3, padding=1),
-            #torch.nn.BatchNorm2d(64),
+        self.maps = nn.Sequential(
+            nn.Conv2d(self.hparams.img_channels_in, 1, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(1),
+            nn.ReLU(),
+            #nn.Conv2d(channels_in, 64, kernel_size=3, padding=1),
+            #nn.BatchNorm2d(64),
         )
 
         # regressor
-        self.regressor = torch.nn.Sequential(
-            torch.nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, 1),
+        self.regressor = nn.Sequential(
+            nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, 1),
             nn.Sigmoid()
         )
         
@@ -968,7 +968,7 @@ class Attention2DSTILRegressor(pl.LightningModule):
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
         parser.add_argument("--num-classes", type=int)
-        parser.add_argument("--learning_rate", type=float, default=5e-4)
+        parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--weight_decay", type=float, default=5e-4)
         return parser
 
@@ -1034,7 +1034,7 @@ class Attention2DSTILRegressor(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer
@@ -1055,7 +1055,7 @@ class Attention2DSTILRegressor(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay
         )
         return optimizer

@@ -130,22 +130,26 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
                 
 class MMDataset(Dataset):
-    def __init__(self, root_dir='./', data_file='data/stils/data_stils.csv', split=None, rand_seed=42):
+    def __init__(self, root_dir='./', data_file='data/stils/data_stils.csv', split=None, use_rand_splits=True, rand_seed=42):
         """
         Args:
             root_dir (string): path to data directory
             csv_file (string): Path to the file w/ the dataset information.
             split (string): 'train', 'val', or 'test'.
+            use_rand_splits (bool): Whether to use random splits or fixed splits.
+            rand_seed (int): Random seed to use for splitting the dataset.
         """
         self.root_dir = root_dir
         df = pd.read_csv(data_file)
+        
         # Split the dataset into train+val set and test set
-        train_val_df, test_df = train_test_split(df, test_size=0.1, random_state=rand_seed)
-
+        if use_rand_splits:
+            train_val_df, test_df = train_test_split(df, test_size=0.1, random_state=rand_seed)
+        else:
+            train_val_df, test_df = df[df['split'] == 'train'], df[df['split'] == 'test']
         # Further split the train+val set into separate training and validation sets
         train_df, val_df = train_test_split(train_val_df, test_size=0.11, random_state=rand_seed)  # 0.11 x 0.9 = 0.099 ~ 0.1
-        # self.split = split
-        # self.df = df[df['set'] == split] if split is not None else df
+
         self.df = train_df if split == 'train' else val_df if split == 'val' else test_df if split == 'test' else df
 
     def __len__(self):
