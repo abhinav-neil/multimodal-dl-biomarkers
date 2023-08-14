@@ -161,17 +161,18 @@ def train_mm_stil(model, train_loader, val_loader, args):
     print(f'training on device: {model.device}')
     return model, trainer
 
-def kfold_cv(model_class, dataset, args={}):
+def kfold_cv(model_class, dataset, model_args={}, train_args={}):
     """
     Performs k-fold cross-validation training.
 
     Args:
         model: the model to be trained.
         dataset: The entire dataset.
-        args (dict): training args
+        model_args (dict): model args
+        train_args (dict): training args
     """
     # Initialize KFold
-    k = args.get('k', 5)    # number of folds
+    k = train_args.get('k', 5)    # number of folds
     kf = KFold(n_splits=k, shuffle=True, random_state=42)
 
     # Store results for each fold
@@ -183,24 +184,24 @@ def kfold_cv(model_class, dataset, args={}):
         # Create data loaders for the current fold
         train_subset = Subset(dataset, train_indices)
         val_subset = Subset(dataset, val_indices)
-        train_loader = DataLoader(train_subset, batch_size=args.get('bsz', 32), shuffle=True, collate_fn=MMDataset.mm_collate_fn, num_workers=12)
-        val_loader = DataLoader(val_subset, batch_size=args.get('bsz', 32), shuffle=False, collate_fn=MMDataset.mm_collate_fn, num_workers=12)
+        train_loader = DataLoader(train_subset, batch_size=train_args.get('bsz', 32), shuffle=True, collate_fn=MMDataset.mm_collate_fn, num_workers=12)
+        val_loader = DataLoader(val_subset, batch_size=train_args.get('bsz', 32), shuffle=False, collate_fn=MMDataset.mm_collate_fn, num_workers=12)
 
         # Initialize model and train for the current fold
-        model = model_class()
-        model, trainer = train_mm_stil(model, train_loader, val_loader, args)
+        model = model_class(**model_args)
+        model, trainer = train_mm_stil(model, train_loader, val_loader, train_args)
 
         # Evaluate the trained model on the validation set for the current fold
         results = trainer.test(model, val_loader)
         fold_results.append(results[0])
     
     # Write results to log file
-    log_file = f'outputs/{model_class.__name__}/kfold_cv.json' if not args.get('log_file', None) else args['log_file']
+    log_file = f'outputs/{model_class.__name__}/kfold_cv.json' if not train_args.get('log_file', None) else train_args['log_file']
     os.makedirs(log_file.rsplit('/', 1)[0], exist_ok=True)
     log = {
         'model': model_class.__name__,
         'k': k,
-        'args': args,
+        'args': train_args,
         'results': fold_results
     }
     with open(log_file, 'w') as f:

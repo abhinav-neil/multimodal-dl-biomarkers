@@ -616,24 +616,33 @@ class Attention1DSTILClassifier(pl.LightningModule):
 class Attention1DSTILRegressor(pl.LightningModule):
     def __init__(
             self,
+            mode: str='multimodal',
             img_channels_in: int=2048,
             text_channels_in: int=1024,
             lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
     ):
-        """Initialize the classification model."""
+        """Initialize the regression model."""
         super().__init__()
+
+        # input modalities
+        assert mode in ['multimodal', 'image'], "mode must be either 'multimodal' or 'image'"
+        self.mode = mode
+        
         self.save_hyperparameters()
+
+        # linear attention module
         self.attention = nn.Sequential(
-            nn.Linear(self.hparams.img_channels_in, 128),
+            nn.Linear(img_channels_in, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
         )
         
         # regressor
+        channels_in = img_channels_in + text_channels_in if mode == 'multimodal' else img_channels_in
         self.regressor = nn.Sequential(
-            nn.Linear(self.hparams.img_channels_in + self.hparams.text_channels_in, 1),
+            nn.Linear(channels_in, 1),
             nn.Sigmoid()
         )
         
@@ -672,9 +681,10 @@ class Attention1DSTILRegressor(pl.LightningModule):
 
             # Concatenate the global image embedding with the text embedding.
             text_sub_x = text_sub_x.to(self.device).squeeze()
-            mm_feats = torch.cat((img_sub_x, text_sub_x))
+            
+            feats = torch.cat((img_sub_x, text_sub_x)) if self.mode == 'multimodal' else img_sub_x
 
-            out.append(mm_feats)
+            out.append(feats)
 
         out = torch.stack(out)  # Stack all tensors in the list into a single tensor
         out = self.regressor(out)  # Pass the tensor through the classifier
