@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader, default_collate
 from sklearn.model_selection import train_test_split
 from pypdf import PdfReader
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 def extract_text_from_pdf(data_dir):
     """
@@ -178,3 +179,83 @@ class MMDataset(Dataset):
     def mm_collate_fn(batch):
         wsi_feats, report_feats, stil_scores, stil_levels = zip(*batch)
         return list(wsi_feats), list(report_feats), default_collate(stil_scores).float(), default_collate(stil_levels)
+    
+def classify_subtype_grade_zs(lm_name, reports_dir):
+    """
+    Classify cancer subtypes and grade using zero-shot classification.
+
+    Parameters:
+    - lm_name (str): Name of the language model to use.
+    - reports_dir (str): Directory containing the report files.
+
+    Returns:
+    - DataFrame: A dataframe with report names as indices and predicted labels for each category as columns.
+    """
+    
+    # Load LM & tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(lm_name)
+    lm = AutoModelForSequenceClassification.from_pretrained(lm_name)
+
+    # Define the labels for each subtype & grade
+    region_labels = ['ductal/intraductal', 'lobular', 'metastatic', 'other'] # region of origin
+    localization_labels = ['in-situ', 'invasive/infiltrating', 'metastatic', 'other'] # degree of localization
+    grade_labels = ['grade 1', 'grade 2', 'grade 3', 'NA'] # grade
+
+    # Create a zero-shot classification pipeline
+    classifier = pipeline("zero-shot-classification", model=lm, tokenizer=tokenizer)
+
+    # Placeholder for results
+    results = []
+
+    # Loop through each report in the directory
+    reports_list = sorted(os.listdir(reports_dir))
+    for report in tqdm(reports_list):
+        report_path = os.path.join(reports_dir, report)
+        
+        with open(report_path, 'r') as f:
+            sample_report = f.read()
+
+        # Tokenize the report and split it into overlapping chunks
+        max_length = lm.config.max_position_embeddings - 2  # account for [CLS] and [SEP] tokens
+        overlap = 100
+        tokens = tokenizer.tokenize(sample_report)
+        chunk_size = max_length - overlap - 2  # account for [CLS] and [SEP] tokens and overlap
+        chunks = [tokens[i:i+chunk_size] for i in range(0, len(tokens), chunk_size - overlap)]
+
+        # Initialize scores for each label
+        region_scores = {label: 0 for label in region_labels}
+        localization_scores = {label: 0 for label in localization_labels}
+        grade_scores = {label: 0 for label in grade_labels}
+
+        # Classify each chunk and aggregate the results
+        for chunk in chunks:
+            chunk_text = tokenizer.decode(tokenizer.convert_tokens_to_ids(chunk))
+            
+            # Classify for region
+            region_result = classifier(chunk_text, region_labels)
+            for label, score in zip(region_result["labels"], region_result["scores"]):
+                region_scores[label] += score
+                
+            # Classify for localization
+            localization_result = classifier(chunk_text, localization_labels)
+            for label, score in zip(localization_result["labels"], localization_result["scores"]):
+                localization_scores[label] += score
+                
+            # Classify for grade
+            grade_result = classifier(chunk_text, grade_labels)
+            for label, score in zip(grade_result["labels"], grade_result["scores"]):
+                grade_scores[label] += score
+
+        # The predicted subtype for each category will be the label with the highest aggregated score
+        predicted_region = max(region_scores, key=region_scores.get)
+        predicted_localization = max(localization_scores, key=localization_scores.get)
+        predicted_grade = max(grade_scores, key=grade_scores.get)
+
+        # Append results
+        results.append([report.replace('.txt', ''), predicted_region, predicted_localization, predicted_grade])
+
+    # Convert results to DataFrame
+    df = pd.DataFrame(results, columns=['case_id', 'region', 'localization', 'grade'])
+    df.set_index('case_id', inplace=True)
+
+    return df
