@@ -8,3 +8,4 @@ model_ckpts
 outputs
 
 # files
+.env
