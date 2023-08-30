@@ -89,8 +89,8 @@ def kfold_cv(model_class, dataset, model_args={}, train_args={}):
         # Create data loaders for the current fold
         train_subset = Subset(dataset, train_indices)
         val_subset = Subset(dataset, val_indices)
-        train_loader = DataLoader(train_subset, batch_size=train_args.get('bsz', 32), shuffle=True, collate_fn=dataset.mm_collate_fn, num_workers=12)
-        val_loader = DataLoader(val_subset, batch_size=train_args.get('bsz', 32), shuffle=False, collate_fn=dataset.mm_collate_fn, num_workers=12)
+        train_loader = DataLoader(train_subset, batch_size=train_args.get('bsz', 32), shuffle=True, collate_fn=mm_collate_fn, num_workers=12)
+        val_loader = DataLoader(val_subset, batch_size=train_args.get('bsz', 32), shuffle=False, collate_fn=mm_collate_fn, num_workers=12)
 
         # Initialize model and train for the current fold
         model = model_class(**model_args)

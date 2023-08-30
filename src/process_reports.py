@@ -10,7 +10,7 @@ import requests
 from dotenv import load_dotenv
 import torch
 from pypdf import PdfReader
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM, pipeline, AutoConfig
+from transformers import AutoTokenizer, AutoModel,  AutoModelForSequenceClassification, AutoModelForCausalLM, pipeline, AutoConfig
 
 def extract_text_from_pdf(data_dir):
     """
@@ -66,7 +66,70 @@ def extract_text_from_pdf(data_dir):
                     # Write the extracted text to a file
                     with open(text_file_path, 'w') as output_file:
                         output_file.write(text)
-      
+
+def summarize_reports(lm_name='gpt-3.5-turbo-16k', reports_dir='data/reports', reports_sum_dir='data/reports_sum', args={'max_tokens': 500}):
+    """
+    Summarize path reports using zero-shot generation.
+
+    Args:
+    - lm_name (str): Name of the language model to use.
+    - reports_dir (str): Directory containing the report files.
+    - reports_sum_dir (str): Directory to save the summary files.
+    - args (dict): Additional arguments for the model or API.
+
+    Returns:
+    - DataFrame: Pandas DataFrame containing the classification results.
+    """
+    
+    # call openai
+    load_dotenv()
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not found in environment variables.")
+    API_URL = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # Loop through all reports in the directory
+    for report in tqdm(os.listdir(reports_dir)):
+        dest_file = os.path.join(reports_sum_dir, report)
+        # check if file already exists
+        if os.path.exists(dest_file):
+            continue
+        with open(os.path.join(reports_dir, report), 'r') as f:
+            report_text = f.read()
+
+        # construct prompt for lm
+        prompt = f'''This is a pathology report for a patient diagnosed with breast cancer. The report is unstructured and contains many errors. Summarize the report. Your summary should retain important info like the final diagnosis, cancer subtype, grade etc. and should not exceed 400 words.\n {report_text}'''
+        
+        data = {
+            "model": lm_name,
+            "messages": [{"role": "system", "content": "You are a helpful assistant."},
+                            {"role": "user", "content": prompt}],
+            **args  # Add any additional arguments
+        }
+        
+        # Retry mechanism
+        max_retries = 3
+        wait_time = 10  # in seconds
+        for attempt in range(max_retries):
+            try:
+                # call openai text generation api
+                response = requests.post(API_URL, headers=headers, json=data)
+                response.raise_for_status()
+                out = response.json()["choices"][0]["message"]["content"]
+                # write cleaned data to file
+                with open(dest_file, 'w') as f:
+                    f.write(out)
+            except requests.HTTPError as e:
+                print(f"HTTP error: {e}, retrying...")
+                if attempt < max_retries - 1:  # i.e. if it's not the last attempt
+                    time.sleep(wait_time)  # wait for a bit before retrying
+                else:
+                    print("max retries reached, skipping...")
+            
 def distill_reports(reports_dir, summary_dir, res_dir):
     # Ensure output directories exist
     os.makedirs(summary_dir, exist_ok=True)
@@ -100,59 +163,53 @@ def distill_reports(reports_dir, summary_dir, res_dir):
                 with open(os.path.join(res_dir, report_file), 'w') as f_res:
                     f_res.write(res)
                                       
-def extract_text_features(lm, tokenizer, data_dir, output_dir):
+def extract_text_feats(lm_name='dmis-lab/biobert-large-cased-v1.1-mnli', reports_dir='data/reports_sum', report_feats_dir='data/report_feats', overwrite=True):
     """
     Function to extract features from text reports using BioBERT.
 
     Args:
-    lm (transformers.PreTrainedModel): The pretrained BioBERT model.
-    tokenizer (transformers.PreTrainedTokenizer): The tokenizer used to preprocess the reports.
-    data_dir (str): Path to the directory containing the case folders.
+    lm_name: The name of the pretrained lm on huggingface.
+    reports_dir (str): Path to the directory containing the processed reports.
     output_dir (str): Path to the directory to save the extracted features.
+    overwrite (bool): Whether to overwrite existing files.
     
     Returns:
     None. The function saves the extracted features to .pt files in the 'report_feats' directory.
     """
 
+    # init lm and tokenizer
+    lm = AutoModel.from_pretrained(lm_name)
+    tokenizer = AutoTokenizer.from_pretrained(lm_name)
     # create directory to save extracted features
-    # output_dir = f'{data_dir}/report_feats'
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(report_feats_dir, exist_ok=True)
 
-    # loop through each case folder (folders starting with 'TCGA-')
-    for case_folder in os.listdir(data_dir):
-        if case_folder.startswith('TCGA-'):
-            case_folder_path = os.path.join(data_dir, case_folder)
+    # loop through each report in reports_dir
+    for report in tqdm(os.listdir(reports_dir)):
+        dest_file = os.path.join(report_feats_dir, f'{report[:-4]}.report.pt')
+        # check if file already exists
+        if os.path.exists(dest_file) and not overwrite:
+            continue
+        
+        # open the file and read its content
+        with open(os.path.join(reports_dir, report), 'r') as f:
+            report_text = f.read()
 
-            # loop through each file in the case folder
-            for filename in tqdm(os.listdir(case_folder_path)):
-                # check if it's a .txt file
-                if filename.endswith('.txt'):
-                    file_path = os.path.join(case_folder_path, filename)
+        # preprocess/tokenize the report
+        inputs = tokenizer(report_text, return_tensors='pt', padding=True, truncation=True, max_length=lm.config.max_position_embeddings)
 
-                    # open the file and read its content
-                    with open(file_path, 'r') as file:
-                        report = file.read()
+        # extract features using the pretrained biobert model
+        with torch.no_grad():
+            outputs = lm(**inputs)
 
-                    # preprocess/tokenize the report
-                    inputs = tokenizer(report, return_tensors='pt', padding=True, truncation=True, max_length=512)
+        # get the hidden states of the last layer
+        last_hidden_states = outputs.last_hidden_state
 
-                    # extract features using the pretrained biobert model
-                    with torch.no_grad():
-                        outputs = lm(**inputs)
+        # compute the mean of the hidden states
+        report_feats = torch.mean(last_hidden_states, dim=1)
 
-                    # get the hidden states of the last layer
-                    last_hidden_states = outputs.last_hidden_state
+        # save the extracted features
+        torch.save(report_feats, dest_file)
 
-                    # compute the mean of the hidden states
-                    report_feats = torch.mean(last_hidden_states, dim=1)
-
-                    # save the extracted features
-                    report_feats_filename = f'{filename[:-4]}.report.pt'  # remove '.txt' from filename
-                    report_feats_file_path = os.path.join(output_dir, report_feats_filename)
-                    torch.save(report_feats, report_feats_file_path)
-
-                    break
-                
 def classify_subtype_grade_zs(lm_name, reports_dir):
     """
     Classify cancer subtypes and grade using zero-shot classification.

@@ -4,13 +4,13 @@ import torch.nn.functional as F
 import torchmetrics
 import pytorch_lightning as pl
   
-class Attention1DSTILRegressor(pl.LightningModule):
+class Attention1DRegressor(pl.LightningModule):
     '''
-    Attention-based regression model for STIL prediction.
+    Attention-based regression model for STIL/MSI prediction.
     '''
     def __init__(
             self,
-            mode: str='multimodal',
+            mode: str='mm',
             target: str='stils',
             img_channels_in: int=2048,
             text_channels_in: int=1024,
@@ -21,16 +21,18 @@ class Attention1DSTILRegressor(pl.LightningModule):
         '''
         Initialize the 1D attention regressor.add()
         Inputs:
-            mode: str, input modality, either 'multimodal' or 'img'
-            target: str, target variable (stils), included for compatibility
+            mode: str, input modality, either 'mm' or 'img' or 'text'
+            target: str, target variable, either 'stils' or 'msi'
             img_channels_in: int, dim of image features
             text_channels_in: int, dim of text features
             lr: float, learning rate for optimizer
             weight_decay: float, weight decay for optimizer
         '''
         super().__init__()
+        # target variable
+        assert target in ['stils', 'msi'], "target must be either 'stils' or 'msi'"
         # input modalities
-        assert mode in ['multimodal', 'img'], "mode must be either 'multimodal' or 'img'"
+        assert mode in ['mm', 'img', 'text'], "mode must be either 'mm' or 'img' or 'text'"
         self.save_hyperparameters()
 
         # linear attention module
@@ -41,7 +43,7 @@ class Attention1DSTILRegressor(pl.LightningModule):
         )
         
         # regressor
-        channels_in = img_channels_in + text_channels_in if mode == 'multimodal' else img_channels_in
+        channels_in = img_channels_in + text_channels_in if mode == 'mm' else img_channels_in if mode == 'img' else text_channels_in
         self.regressor = nn.Sequential(
             nn.Linear(channels_in, 1),
             nn.Sigmoid()
@@ -50,14 +52,12 @@ class Attention1DSTILRegressor(pl.LightningModule):
         self.loss = nn.MSELoss()    # MSE loss fn
         
         # metrics
-        self.train_corr = torchmetrics.PearsonCorrCoef()
-        self.train_r2 = torchmetrics.R2Score()
-        self.val_corr = torchmetrics.PearsonCorrCoef()
-        self.val_r2 = torchmetrics.R2Score()
-        self.test_corr = torchmetrics.PearsonCorrCoef()
-        self.test_r2 = torchmetrics.R2Score()
+        self.corr = torchmetrics.PearsonCorrCoef()
+        self.r2 = torchmetrics.R2Score()
         
     def add_model_specific_args(parser):
+        parser.add_argument("--mode", type=str),
+        parser.add_argument("--target", type=str),
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
         parser.add_argument("--lr", type=float, default=5e-4)
@@ -72,7 +72,6 @@ class Attention1DSTILRegressor(pl.LightningModule):
         out = []
         for img_sub_x, text_sub_x in zip(img_feats, text_feats):
             # Weighted sum of all the image feature vectors.
-            img_sub_x = img_sub_x.to(self.device)
             img_sub_x = img_sub_x.reshape(self.hparams.img_channels_in, -1).T
             attention_w = self.attention(img_sub_x)
             attention_w = torch.transpose(attention_w, 1, 0)
@@ -80,45 +79,40 @@ class Attention1DSTILRegressor(pl.LightningModule):
             img_sub_x = torch.mm(attention_w, img_sub_x).squeeze()
 
             # Concatenate the global image embedding with the text embedding.
-            text_sub_x = text_sub_x.to(self.device).squeeze()
+            text_sub_x = text_sub_x.squeeze()
             
-            feats = torch.cat((img_sub_x, text_sub_x)) if self.hparams.mode == 'multimodal' else img_sub_x
+            feats = torch.cat((img_sub_x, text_sub_x)) if self.hparams.mode == 'mm' else img_sub_x
 
             out.append(feats)
 
         out = torch.stack(out)  # Stack all tensors in the list into a single tensor
         out = self.regressor(out)  # Pass the tensor through the classifier
-        # out = F.softmax(out, dim=1)  # Apply softmax along dimension 1
 
         return out.squeeze()
 
     def step(self, batch, batch_idx):
-        img_feats, text_feats, stil_scores, _ = batch
-        stil_scores = stil_scores.to(self.device)
-        y_hat = self.forward(img_feats, text_feats)
-        loss = self.loss(y_hat, stil_scores)
-        return loss, y_hat, stil_scores
+        img_feats, text_feats = batch['wsi_feats'], batch['report_feats']
+        labels = batch['stil_score'] if self.hparams.target == 'stils' else batch['msi_score']
+        out = self.forward(img_feats, text_feats)
+        loss = self.loss(out, labels)
+        return loss, out, labels
 
     def training_step(self, batch, batch_idx):
         loss, y_hat, y = self.step(batch, batch_idx)
-        self.log("train_loss", loss, batch_size=len(y), on_step=True, on_epoch=True)
+        self.log("train_loss", loss, on_step=True, on_epoch=True, batch_size=len(y))
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss, y_hat, y = self.step(batch, batch_idx)
-        self.log("val_loss", loss, batch_size=len(y), on_step=True, on_epoch=True)
-        self.val_corr(y_hat, y)
-        self.log("val_corr", self.val_corr, on_step=True, on_epoch=True)
-        self.val_r2(y_hat, y)
-        self.log("val_r2", self.val_r2, on_step=True, on_epoch=True)
+        self.log("val_loss", loss, on_step=True, on_epoch=True, batch_size=len(y))
+        self.log("val_corr", self.corr(y_hat, y), on_step=True, on_epoch=True, batch_size=len(y))
+        self.log("val_r2", self.r2(y_hat, y), on_step=True, on_epoch=True, batch_size=len(y))
         return loss
 
     def test_step(self, batch, batch_idx):
         loss, y_hat, y = self.step(batch, batch_idx)
-        self.test_corr(y_hat, y)
-        self.log("test_corr", self.test_corr, on_step=True, on_epoch=True)
-        self.test_r2(y_hat, y)
-        self.log("test_r2", self.test_r2, on_step=True, on_epoch=True)
+        self.log("test_corr", self.corr(y_hat, y), on_step=True, on_epoch=True, batch_size=len(y))
+        self.log("test_r2", self.r2(y_hat, y), on_step=True, on_epoch=True, batch_size=len(y))
         return loss
 
     def configure_optimizers(self):
@@ -132,7 +126,7 @@ class Attention1DSTILRegressor(pl.LightningModule):
 class Attention1DClassifier(pl.LightningModule):
     def __init__(
             self,
-            mode: str='multimodal',
+            mode: str='mm',
             target: str='region',
             img_channels_in: int=2048,
             text_channels_in: int=1024,
@@ -144,7 +138,7 @@ class Attention1DClassifier(pl.LightningModule):
         '''
         Initialize the 1D attention classifier.
         Inputs:
-            mode: str, input modality, either 'multimodal' or 'img'
+            mode: str, input modality, either 'mm' or 'img'
             target: str, target variable ('region' or 'local' or 'grade')
             img_channels_in: int, dim of image features
             text_channels_in: int, dim of text features
@@ -155,7 +149,9 @@ class Attention1DClassifier(pl.LightningModule):
         super().__init__()
         
         # input modalities
-        assert mode in ['multimodal', 'text', 'img'], "mode must be either 'multimodal' or 'text' or 'img'"
+        assert mode in ['mm', 'text', 'img'], "mode must be either 'mm' or 'text' or 'img'"
+        # target
+        assert target in ['region', 'local', 'grade'], "target must be either 'region' or 'local' or 'grade'"
         
         self.save_hyperparameters()
         self.attention = nn.Sequential(
@@ -166,7 +162,7 @@ class Attention1DClassifier(pl.LightningModule):
         )
         
         # Modify the classifier to produce 3 outputs
-        channels_in = img_channels_in + text_channels_in if mode == 'multimodal' else img_channels_in if mode == 'img' else text_channels_in
+        channels_in = img_channels_in + text_channels_in if mode == 'mm' else img_channels_in if mode == 'img' else text_channels_in
         
         # initialize classifiers
         self.classifier = nn.Sequential(
@@ -212,7 +208,7 @@ class Attention1DClassifier(pl.LightningModule):
                 img_sub_x = torch.mm(attention_w, img_sub_x).squeeze()
 
                 # Concatenate the global image embedding with the text embedding.
-                feats = torch.cat((img_sub_x, text_sub_x)) if self.hparams.mode == 'multimodal' else img_sub_x
+                feats = torch.cat((img_sub_x, text_sub_x)) if self.hparams.mode == 'mm' else img_sub_x
                 out.append(feats)
 
         out = torch.stack(out)  # Stack all tensors in the list into a single tensor
