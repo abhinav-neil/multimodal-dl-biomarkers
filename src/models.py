@@ -1,3 +1,4 @@
+from typing import List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -126,11 +127,13 @@ class Attention1DRegressor(pl.LightningModule):
 class Attention1DClassifier(pl.LightningModule):
     def __init__(
             self,
-            mode: str='mm',
-            target: str='region',
+            target: str,
+            mode: str,
             img_channels_in: int=2048,
             text_channels_in: int=1024,
             num_classes: int=4,
+            class_weights=None,
+            metrics: List[str] = ["acc"],
             lr: float = 5e-4,
             weight_decay: float = 5e-4,
             **kwargs,
@@ -139,10 +142,12 @@ class Attention1DClassifier(pl.LightningModule):
         Initialize the 1D attention classifier.
         Inputs:
             mode: str, input modality, either 'mm' or 'img'
-            target: str, target variable ('region' or 'local' or 'grade')
+            target: str, target variable, one of 'region', 'local', 'grade', 'msi'
             img_channels_in: int, dim of image features
             text_channels_in: int, dim of text features
             num_classes: int, number of target classes
+            class_weights: list of class weights to handle imbalance
+            metrics: list of metrics to use, one or more of 'acc', 'f1', 'bal_acc', 'auroc', 'acc_per_class', 'f1_per_class', 'auroc_per_class'
             lr: float, learning rate for optimizer
             weight_decay: float, weight decay for optimizer
         '''
@@ -151,7 +156,7 @@ class Attention1DClassifier(pl.LightningModule):
         # input modalities
         assert mode in ['mm', 'text', 'img'], "mode must be either 'mm' or 'text' or 'img'"
         # target
-        assert target in ['region', 'local', 'grade'], "target must be either 'region' or 'local' or 'grade'"
+        assert target in ['region', 'local', 'grade', 'msi'], "target must be one of 'region', 'local', 'grade', 'msi'"
         
         self.save_hyperparameters()
         self.attention = nn.Sequential(
@@ -168,10 +173,21 @@ class Attention1DClassifier(pl.LightningModule):
         self.classifier = nn.Sequential(
             nn.Linear(channels_in, num_classes))
         
-        self.loss = nn.CrossEntropyLoss()   # define cross-entropy loss
+        # class weights to handle imbalance
+        class_weights = torch.tensor(class_weights, dtype=torch.float32) if class_weights is not None else None 
+        self.loss = nn.CrossEntropyLoss(weight=class_weights)   # define cross-entropy loss
         
         # metrics
-        self.acc = torchmetrics.Accuracy(task='multiclass', num_classes=num_classes)
+        # avg metrics
+        self.acc = torchmetrics.Accuracy(task='multiclass', num_classes=num_classes, average='weighted')
+        self.bal_acc = torchmetrics.Accuracy(task='multiclass', num_classes=num_classes, average='macro')
+        self.f1 = torchmetrics.F1Score(task='multiclass', num_classes=num_classes, average='macro')
+        self.auroc = torchmetrics.AUROC(task='multiclass', num_classes=num_classes, average='macro')
+        # per class metrics
+        self.acc_per_class = torchmetrics.Accuracy(task='multiclass', num_classes=num_classes, average=None)
+        self.f1_per_class = torchmetrics.F1Score(task='multiclass', num_classes=num_classes, average=None)
+        self.auroc_per_class = torchmetrics.AUROC(task='multiclass', num_classes=num_classes, average=None)
+        self.metrics = metrics  # Store the metrics to use
 
     def add_model_specific_args(parser):
         parser.add_argument("--mode", type=str),
@@ -179,6 +195,7 @@ class Attention1DClassifier(pl.LightningModule):
         parser.add_argument("--img-channels-in", type=int)
         parser.add_argument("--text-channels-in", type=int)
         parser.add_argument("--num-classes", type=int)
+        parser.add_argument("--metrics", type=list)
         parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--weight_decay", type=float, default=5e-4)
         return parser
@@ -217,6 +234,31 @@ class Attention1DClassifier(pl.LightningModule):
         
         return out
 
+    def log_metrics(self, prefix: str, out, labels):
+        if "acc" in self.metrics:
+            acc = self.acc(out, labels)
+            self.log(f"{prefix}_acc", acc, batch_size=len(labels), on_step=True, on_epoch=True)
+        if "f1" in self.metrics:
+            f1_score = self.f1(out, labels)
+            self.log(f"{prefix}_f1", f1_score, batch_size=len(labels), on_step=True, on_epoch=True)
+        if "bal_acc" in self.metrics:
+            bal_accuracy = self.bal_acc(out, labels)
+            self.log(f"{prefix}_bal_acc", bal_accuracy, batch_size=len(labels), on_step=True, on_epoch=True)
+        if "auroc" in self.metrics:
+            auroc_score = self.auroc(out, labels)
+            self.log(f"{prefix}_auroc", auroc_score, batch_size=len(labels), on_step=True, on_epoch=True)
+        if "acc_per_class" in self.metrics:
+            accs_per_class = self.acc_per_class(out, labels)
+            for i, acc_value in enumerate(accs_per_class):
+                self.log(f"{prefix}_acc_class_{i}", acc_value, on_step=True, on_epoch=True)
+        if "f1_per_class" in self.metrics:
+            f1s_per_class = self.f1_per_class(out, labels)
+            for i, f1_value in enumerate(f1s_per_class):
+                self.log(f"{prefix}_f1_class_{i}", f1_value, on_step=True, on_epoch=True)
+        if "auroc_per_class" in self.metrics:
+            aurocs_per_class = self.auroc_per_class(out, labels)
+            for i, auroc_value in enumerate(aurocs_per_class):
+                self.log(f"{prefix}_auroc_class_{i}", auroc_value, on_step=True, on_epoch=True)
     def step(self, batch, batch_idx):
         img_feats, text_feats, labels = batch['wsi_feats'], batch['report_feats'], batch[self.hparams.target]
         out = self.forward(img_feats, text_feats)
@@ -230,16 +272,14 @@ class Attention1DClassifier(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         loss, out, labels = self.step(batch, batch_idx)
-        acc = self.acc(out, labels)
+        self.log_metrics("val", out, labels)
         self.log("val_loss", loss, batch_size=len(labels), on_step=True, on_epoch=True)
-        self.log("val_acc", acc, batch_size=len(labels), on_step=True, on_epoch=True)
         return loss        
 
     def test_step(self, batch, batch_idx):
         loss, out, labels = self.step(batch, batch_idx)
-        acc = self.acc(out, labels)
+        self.log_metrics("test", out, labels)
         self.log("test_loss", loss, batch_size=len(labels), on_step=True, on_epoch=True)
-        self.log("test_acc", acc, batch_size=len(labels), on_step=True, on_epoch=True)
         return loss
     
     def configure_optimizers(self):

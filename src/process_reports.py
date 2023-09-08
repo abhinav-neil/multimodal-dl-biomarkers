@@ -12,14 +12,16 @@ import torch
 from pypdf import PdfReader
 from transformers import AutoTokenizer, AutoModel,  AutoModelForSequenceClassification, AutoModelForCausalLM, pipeline, AutoConfig
 
-def extract_text_from_pdf(data_dir):
+def extract_text_from_pdf(data_dir, reports_dir):
     """
     This function extracts text from PDF files in a given directory and its subdirectories.
     It saves the extracted text as a .txt file with the same name as the original PDF file.
     
     Args:
     data_dir (str): The directory to search for PDF files.
+    reports_dir (str): The directory to save the extracted text files.
     """
+    os.makedirs(reports_dir, exist_ok=True)
     # Loop through all the folders in the current directory
     for root, dirs, files in tqdm(os.walk(data_dir)):
         for file in files:
@@ -28,24 +30,9 @@ def extract_text_from_pdf(data_dir):
             
             # Check if the file is a PDF
             if file.endswith('.PDF'):
-                # Construct the new file path with a lowercase extension
-                new_file_path = file_path[:-4] + '.pdf'
-                
-                # Check if a file with the new name already exists
-                if os.path.exists(new_file_path):
-                    # If it does, delete the original file
-                    os.remove(file_path)
-                else:
-                    # If it doesn't, rename the original file
-                    os.rename(file_path, new_file_path)
-                
-                # Update the file path to reflect the new name
-                file_path = new_file_path
-            
-            # Check if the file is a PDF (again, in case it was just renamed)
-            if file.endswith('.pdf'):
                 # Construct the path for the text file
-                text_file_path = file_path.replace('.pdf', '.txt')
+                # text_file_path = file_path.replace('.PDF', '.txt')
+                text_file_path = os.path.join(reports_dir, file[:12] + '.txt')
                 
                 # Check if the text file already exists
                 if not os.path.exists(text_file_path):
@@ -63,23 +50,27 @@ def extract_text_from_pdf(data_dir):
                         # Append the page text to the overall text
                         text += page_text
                     
-                    # Write the extracted text to a file
-                    with open(text_file_path, 'w') as output_file:
-                        output_file.write(text)
+                    # check if text is empty or too short
+                    if len(text) > 20:
+                        # Write the extracted text to a file
+                        with open(text_file_path, 'w') as output_file:
+                            output_file.write(text)
 
-def summarize_reports(lm_name='gpt-3.5-turbo-16k', reports_dir='data/reports', reports_sum_dir='data/reports_sum', args={'max_tokens': 500}):
+def summarize_reports(reports_dir, reports_sum_dir, lm_name='gpt-3.5-turbo-16k', args={'max_tokens': 500}):
     """
     Summarize path reports using zero-shot generation.
 
     Args:
-    - lm_name (str): Name of the language model to use.
     - reports_dir (str): Directory containing the report files.
     - reports_sum_dir (str): Directory to save the summary files.
+    - lm_name (str): Name of the language model to use.
     - args (dict): Additional arguments for the model or API.
 
     Returns:
     - DataFrame: Pandas DataFrame containing the classification results.
     """
+    # create summary directory if it doesn't exist
+    os.makedirs(reports_sum_dir, exist_ok=True)
     
     # call openai
     load_dotenv()
@@ -163,7 +154,7 @@ def distill_reports(reports_dir, summary_dir, res_dir):
                 with open(os.path.join(res_dir, report_file), 'w') as f_res:
                     f_res.write(res)
                                       
-def extract_text_feats(lm_name='dmis-lab/biobert-large-cased-v1.1-mnli', reports_dir='data/reports_sum', report_feats_dir='data/report_feats', overwrite=True):
+def extract_text_feats(reports_dir, report_feats_dir, lm_name='dmis-lab/biobert-large-cased-v1.1-mnli', overwrite=True):
     """
     Function to extract features from text reports using BioBERT.
 

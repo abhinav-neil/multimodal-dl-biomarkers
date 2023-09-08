@@ -449,8 +449,8 @@ def main(
                     len(slides_paths),
                     skip_existing=skip_existing_outputs
                 )
-            except dlup.UnsupportedSlideError:
-                print(f"invalid file: {slide_path}")
+            except dlup.UnsupportedSlideError as e:
+                print(f"encountered error {e} when processing {slide_path}")
                 if invalid_slides_path is not None:
                     # write unsupported file name to file
                     with open(invalid_slides_path, 'a') as f:
