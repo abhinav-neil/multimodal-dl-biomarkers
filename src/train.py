@@ -4,7 +4,7 @@ import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, StratifiedKFold
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -78,18 +78,35 @@ def kfold_cv(model_class, dataset, model_args={}, train_args={}):
     """
     # Initialize KFold
     k = train_args.get('k', 5)    # number of folds
-    kf = KFold(n_splits=k, shuffle=True, random_state=42)
+    kf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
 
+    # extract the target labels
+    labels = dataset.get_labels()
+    
     # Store results for each fold
-    fold_results = []
+    results = {}
 
-    for fold, (train_indices, val_indices) in enumerate(kf.split(dataset.df)):
+    for fold, (train_indices, val_indices) in enumerate(kf.split(dataset.df, labels)):
         print(f"training fold {fold + 1}/{k}")
 
         # Create data loaders for the current fold
         train_subset = Subset(dataset, train_indices)
         val_subset = Subset(dataset, val_indices)
-        train_loader = DataLoader(train_subset, batch_size=train_args.get('bsz', 32), shuffle=True, collate_fn=mm_collate_fn, num_workers=12)
+        
+        # resampling
+        if train_args.get('resample', False):
+            # get train labels
+            train_labels = train_subset.dataset.get_labels()[train_indices]
+            # Compute sample weights
+            class_sample_count = np.array([len(np.where(train_labels==t)[0]) for t in np.unique(train_labels)])
+            weight = 1. / class_sample_count
+            samples_weight = np.array([weight[t] for t in train_labels])
+            samples_weight = torch.from_numpy(samples_weight)
+            sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
+            train_loader = DataLoader(train_subset, batch_size=train_args.get('bsz', 32), shuffle=False, num_workers=12, collate_fn=mm_collate_fn, sampler=sampler)
+        else:
+            train_loader = DataLoader(train_subset, batch_size=train_args.get('bsz', 32), shuffle=True, collate_fn=mm_collate_fn, num_workers=12)
+            
         val_loader = DataLoader(val_subset, batch_size=train_args.get('bsz', 32), shuffle=False, collate_fn=mm_collate_fn, num_workers=12)
 
         # Initialize model and train for the current fold
@@ -97,8 +114,10 @@ def kfold_cv(model_class, dataset, model_args={}, train_args={}):
         model, trainer = train_mm(model, train_loader, val_loader, train_args)
 
         # Evaluate the trained model on the validation set for the current fold
-        results = trainer.test(model, val_loader)
-        fold_results.append(results[0])
+        res_fold = trainer.test(model, val_loader)
+        results[fold] = res_fold[0]
+        
+    results['avg'] = {metric: np.mean([results[i][metric] for i in range(k)]) for metric in results[0].keys()}
     
     # Write results to log file
     if train_args.get('log_file', None):
@@ -111,9 +130,9 @@ def kfold_cv(model_class, dataset, model_args={}, train_args={}):
         'k': k,
         'model_args': model_args,
         'train_args': train_args,
-        'results': fold_results
+        'results': results
     }
     with open(log_file, 'w') as f:
         json.dump(log, f, indent=4)
 
-    return fold_results
+    return results

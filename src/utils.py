@@ -42,7 +42,7 @@ class MMDataset(Dataset):
         # Define mappings for each target
         self.label2idx = {
             'stils': None,
-            'msi': {'MSS': 0, 'MSI-L': 1, 'MSI-H': 2},
+            'msi': {'MSS': 0, 'MSI-L': 0, 'MSI-H': 1},
             'region': {'ductal': 0, 'lobular': 1, 'mixed': 2, 'NA': 3},
             'local': {'in situ': 0, 'invasive': 1, 'metastatic': 2, 'NA': 3},
             'grade': {'1': 0, '2': 1, '3': 2, 'NA': 3}
@@ -51,7 +51,7 @@ class MMDataset(Dataset):
         df = pd.read_csv(data_file)
         
         # drop rows w/ missing labels
-        df = df.dropna(subset=['stil_score']) if target == 'stils' else df.dropna(subset=['msi_mantis_score']) if target == 'msi' else df.dropna(subset=[target])
+        df = df.dropna(subset=['stil_score']) if target == 'stils' else df.dropna(subset=['msi_sensor']) if target == 'msi' else df.dropna(subset=[target])
         
         # Split the dataset into train+val set and test set
         if use_rand_splits:
@@ -70,7 +70,7 @@ class MMDataset(Dataset):
         if self.target == 'stils':
             return self.df['stil_score'].values
         elif self.target == 'msi':
-            return self.df['msi_mantis'].map(self.label2idx['msi']).values
+            return self.df['msi_sensor'].map(self.label2idx['msi']).values
         else:
             return self.df[self.target].map(self.label2idx[self.target]).values
 
@@ -90,7 +90,7 @@ class MMDataset(Dataset):
         if self.target=='stils':
             item['stil_score'] = self.df.iloc[idx]['stil_score']
         elif self.target=='msi':
-            item['msi'] = torch.tensor(self.label2idx['msi'][self.df.iloc[idx]['msi_mantis']], dtype=torch.long)
+            item['msi'] = torch.tensor(self.label2idx['msi'][self.df.iloc[idx]['msi_sensor']], dtype=torch.long)
         else:
             item[self.target] = torch.tensor(self.label2idx[self.target][self.df.iloc[idx][self.target]], dtype=torch.long)
 
@@ -104,7 +104,7 @@ def mm_collate_fn(batch):
     return batch
 
 
-def create_dataloaders(target, data_file, wsi_feats_dir, report_feats_dir,  use_rand_splits=True, rand_seed=42, bsz=64, resample=False):
+def create_dataloaders(target, data_file, wsi_feats_dir, report_feats_dir,  use_rand_splits=True, stratify=None, rand_seed=42, bsz=64, resample=False):
     '''
     Creates dataloaders for the specified dataset.
     Inputs:
@@ -112,6 +112,7 @@ def create_dataloaders(target, data_file, wsi_feats_dir, report_feats_dir,  use_
         data_file (str): path to the csv file containing the dataset information
         use_rand_splits (bool): whether to use random splits or fixed splits
         rand_seed (int): random seed to use for splitting the dataset
+        stratify (str): whether to stratify the dataset based on the specified target
         bsz (int): batch size
         resample (bool): whether to resample the training set (for imbalanced datasets)
     '''
@@ -132,7 +133,6 @@ def create_dataloaders(target, data_file, wsi_feats_dir, report_feats_dir,  use_
         
     # Create the dataloaders
     # resampling
-    sampler = None
     if resample:
         # Compute sample weights
         class_sample_count = np.array([len(np.where(train_labels==t)[0]) for t in np.unique(train_labels)])

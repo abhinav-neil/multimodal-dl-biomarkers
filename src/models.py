@@ -250,15 +250,16 @@ class Attention1DClassifier(pl.LightningModule):
         if "acc_per_class" in self.metrics:
             accs_per_class = self.acc_per_class(out, labels)
             for i, acc_value in enumerate(accs_per_class):
-                self.log(f"{prefix}_acc_class_{i}", acc_value, on_step=True, on_epoch=True)
+                self.log(f"{prefix}_acc_class_{i}", acc_value, batch_size=len(labels), on_step=True, on_epoch=True)
         if "f1_per_class" in self.metrics:
             f1s_per_class = self.f1_per_class(out, labels)
             for i, f1_value in enumerate(f1s_per_class):
-                self.log(f"{prefix}_f1_class_{i}", f1_value, on_step=True, on_epoch=True)
+                self.log(f"{prefix}_f1_class_{i}", f1_value, batch_size=len(labels), on_step=True, on_epoch=True)
         if "auroc_per_class" in self.metrics:
             aurocs_per_class = self.auroc_per_class(out, labels)
             for i, auroc_value in enumerate(aurocs_per_class):
-                self.log(f"{prefix}_auroc_class_{i}", auroc_value, on_step=True, on_epoch=True)
+                self.log(f"{prefix}_auroc_class_{i}", auroc_value, batch_size=len(labels), on_step=True, on_epoch=True)
+                
     def step(self, batch, batch_idx):
         img_feats, text_feats, labels = batch['wsi_feats'], batch['report_feats'], batch[self.hparams.target]
         out = self.forward(img_feats, text_feats)
