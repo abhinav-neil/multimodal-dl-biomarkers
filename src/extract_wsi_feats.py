@@ -19,9 +19,6 @@ from dlup.experimental_backends import ImageBackend
 import typer
 from rich.progress import Progress, SpinnerColumn, TextColumn, track
 
-# sys.path.append('/home/neil/multimodal/stils/src/stils')
-# from models import retccl_resnet50, HistoRetCCLResnet50_Weights
-
 class Bottleneck(nn.Module):
     expansion: int = 4
 

@@ -6,6 +6,7 @@ ipykernel
 torch
 torchvision
 transformers
+dlup
 pypdf
 scikit-learn
 lightning

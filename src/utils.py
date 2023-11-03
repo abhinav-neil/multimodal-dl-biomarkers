@@ -82,27 +82,25 @@ class MMDataset(Dataset):
         # Load the tensors
         wsi_feats_path = f'{self.wsi_feats_dir}/{self.df.iloc[idx]["wsi_id"]}.wsi.pt'
         report_feats_path = f'{self.report_feats_dir}/{self.df.iloc[idx]["case_id"]}.report.pt'
-        wsi_feats = torch.load(wsi_feats_path)
-        report_feats = torch.load(report_feats_path)
+        wsi_feats = torch.load(wsi_feats_path).float()  # Convert to Float tensor
+        report_feats = torch.load(report_feats_path).float()  # Convert to Float tensor
         
         item = {'wsi_feats': wsi_feats, 'report_feats': report_feats}
         
-        if self.target=='stils':
-            item['stil_score'] = self.df.iloc[idx]['stil_score']
-        elif self.target=='msi':
+        if self.target == 'stils':
+            item['stil_score'] = torch.tensor(self.df.iloc[idx]['stil_score'], dtype=torch.float)  # Convert to Float tensor
+        elif self.target == 'msi':
             item['msi'] = torch.tensor(self.label2idx['msi'][self.df.iloc[idx]['msi_sensor']], dtype=torch.long)
         else:
             item[self.target] = torch.tensor(self.label2idx[self.target][self.df.iloc[idx][self.target]], dtype=torch.long)
 
         return item
     
-    
 def mm_collate_fn(batch):
     # Extract data from the dictionaries
     batch_keys = batch[0].keys()
     batch = {key: default_collate([item[key] for item in batch]) if key != 'wsi_feats' and key != 'report_feats' else [item[key] for item in batch] for key in batch_keys}
     return batch
-
 
 def create_dataloaders(target, data_file, wsi_feats_dir, report_feats_dir,  use_rand_splits=True, stratify=None, rand_seed=42, bsz=64, resample=False):
     '''
@@ -122,7 +120,7 @@ def create_dataloaders(target, data_file, wsi_feats_dir, report_feats_dir,  use_
     train_data = MMDataset(target, data_file, wsi_feats_dir,report_feats_dir, 'train', use_rand_splits, rand_seed)
     val_data = MMDataset(target, data_file, wsi_feats_dir,report_feats_dir, 'val', use_rand_splits, rand_seed)
     test_data = MMDataset(target, data_file, wsi_feats_dir,report_feats_dir, 'test', use_rand_splits, rand_seed)
-
+    
     print(f'size of train set: {len(train_data)}, val set: {len(val_data)}, test set: {len(test_data)}')
 
     # count the number of samples for each class

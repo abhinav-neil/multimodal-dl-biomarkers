@@ -131,7 +131,7 @@ class Attention1DClassifier(pl.LightningModule):
             mode: str,
             img_channels_in: int=2048,
             text_channels_in: int=1024,
-            num_classes: int=4,
+            num_classes: int=2,
             class_weights=None,
             metrics: List[str] = ["acc"],
             lr: float = 5e-4,
@@ -159,6 +159,8 @@ class Attention1DClassifier(pl.LightningModule):
         assert target in ['region', 'local', 'grade', 'msi'], "target must be one of 'region', 'local', 'grade', 'msi'"
         
         self.save_hyperparameters()
+        
+        # linear attention module
         self.attention = nn.Sequential(
             nn.Linear(img_channels_in, 128),
             # nn.Linear(128, 128),
@@ -166,7 +168,7 @@ class Attention1DClassifier(pl.LightningModule):
             nn.Linear(128, 1),
         )
         
-        # Modify the classifier to produce 3 outputs
+        # config channels_in based on mode
         channels_in = img_channels_in + text_channels_in if mode == 'mm' else img_channels_in if mode == 'img' else text_channels_in
         
         # initialize classifiers

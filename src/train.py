@@ -63,7 +63,6 @@ def train_mm(model, train_loader, val_loader, args):
 
     # Train the model
     trainer.fit(model, train_loader, val_loader, ckpt_path=args.get('resume_ckpt', None))
-    print(f'training on device: {model.device}')
     return model, trainer
 
 def kfold_cv(model_class, dataset, model_args={}, train_args={}):
@@ -76,17 +75,22 @@ def kfold_cv(model_class, dataset, model_args={}, train_args={}):
         model_args (dict): model args
         train_args (dict): training args
     """
-    # Initialize KFold
-    k = train_args.get('k', 5)    # number of folds
-    kf = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+    # check if target & mode in model_args and the values are valid
+    assert 'target' in model_args and model_args['target'] in ['msi', 'stils'], "invalid target!"
+    assert 'mode' in model_args and model_args['mode'] in ['text', 'img', 'mm'], "invalid mode!" 
+     
+    # initialize KFold
+    k = train_args.get('k', 5)    # # folds
+    kf = StratifiedKFold(n_splits=k, shuffle=True, random_state=train_args.get('rand_seed', 42))
+    # if model_args['target'] == 'msi' else KFold(n_splits=k, shuffle=True, random_state=train_args.get('rand_seed', 42))
 
     # extract the target labels
-    labels = dataset.get_labels()
+    stratify_on = dataset.df['stil_lvl'] if model_args['target'] == 'stils' else dataset.df['msi_sensor']
     
-    # Store results for each fold
+    # store results for each fold
     results = {}
 
-    for fold, (train_indices, val_indices) in enumerate(kf.split(dataset.df, labels)):
+    for fold, (train_indices, val_indices) in enumerate(kf.split(dataset.df, stratify_on)):
         print(f"training fold {fold + 1}/{k}")
 
         # Create data loaders for the current fold
