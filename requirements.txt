@@ -1,12 +1,15 @@
 numpy
 pandas
 tqdm
+python-dotenv
 ipykernel
 torch
 torchvision
 transformers
+dlup
 pypdf
 scikit-learn
 lightning
 torchmetrics
 tensorboard 
+openai
